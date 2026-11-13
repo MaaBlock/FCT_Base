@@ -247,6 +247,131 @@ namespace FCT {
 #define FCT_SAFE_ADDREF(p) if (p) { p->addRef(); }
 #endif
 
+    class RefCount {
+    public:
+        RefCount() : m_refCount(1) {}
+        RefCount(size_t refCount) : m_refCount(refCount) {}
+        virtual ~RefCount() {}
+        void addRef() {
+            ++m_refCount;
+        }
+        void release() {
+            if (m_refCount.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                deleteThis();
+            }
+        }
+        size_t count() const {
+            return m_refCount.load(std::memory_order_relaxed);
+        }
+        operator bool() const {
+            return m_refCount > 0;
+        }
+    protected:
+        virtual void deleteThis() {
+            FCT_DELETE(this);
+        }
+        std::atomic<size_t> m_refCount;
+    };
+
+    template<typename T>
+    inline void safeAddRef(T* obj) {
+        if (obj) obj->addRef();
+    }
+    template<typename T>
+    inline void safeRelease(T*& obj) {
+        if (obj) {
+            obj->release();
+            obj = nullptr;
+        }
+    }
+
+    template<typename T>
+    class Ptr
+    {
+    public:
+        Ptr() noexcept : m_ptr(nullptr) {}
+        Ptr(std::nullptr_t) noexcept : m_ptr(nullptr) {}
+        Ptr(T* ptr) noexcept : m_ptr(ptr)
+        {
+            safeAddRef(m_ptr);
+        }
+        Ptr(const Ptr& other) noexcept : m_ptr(other.m_ptr)
+        {
+            safeAddRef(m_ptr);
+        }
+        template<typename U, typename = std::enable_if_t<std::is_convertible_v<U*, T*>>>
+        Ptr(const Ptr<U>& other) noexcept : m_ptr(other.get())
+        {
+            safeAddRef(m_ptr);
+        }
+        Ptr(Ptr&& other) noexcept : m_ptr(other.m_ptr)
+        {
+            other.m_ptr = nullptr;
+        }
+        template<typename U, typename = std::enable_if_t<std::is_convertible_v<U*, T*>>>
+        Ptr(Ptr<U>&& other) noexcept : m_ptr(other.release()) {}
+
+        ~Ptr()
+        {
+            safeRelease(m_ptr);
+        }
+
+        Ptr& operator=(T* ptr) noexcept
+        {
+            reset(ptr);
+            return *this;
+        }
+
+        Ptr& operator=(const Ptr& other) noexcept
+        {
+            if (this != &other)
+            {
+                T* old = m_ptr;
+                m_ptr = other.m_ptr;
+                safeAddRef(m_ptr);
+                safeRelease(old);
+            }
+            return *this;
+        }
+
+        Ptr& operator=(Ptr&& other) noexcept
+        {
+            if (this != &other)
+            {
+                safeRelease(m_ptr);
+                m_ptr = other.m_ptr;
+                other.m_ptr = nullptr;
+            }
+            return *this;
+        }
+
+        T* get() const noexcept { return m_ptr; }
+        T* operator->() const noexcept { return m_ptr; }
+        T& operator*() const noexcept { return *m_ptr; }
+        explicit operator bool() const noexcept { return m_ptr != nullptr; }
+
+        T* release() noexcept
+        {
+            T* tmp = m_ptr;
+            m_ptr = nullptr;
+            return tmp;
+        }
+
+        void reset(T* ptr = nullptr) noexcept
+        {
+            if (m_ptr != ptr)
+            {
+                T* old = m_ptr;
+                m_ptr = ptr;
+                safeAddRef(m_ptr);
+                safeRelease(old);
+            }
+        }
+
+    private:
+        T* m_ptr{nullptr};
+    };
+
 } // namespace FCT
 
 #endif // FCT_BASE_REFCOUNT_H

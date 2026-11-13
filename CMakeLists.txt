@@ -84,8 +84,12 @@ target_include_directories(FCT_Base PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
+find_package(absl CONFIG REQUIRED)
+
 target_link_libraries(FCT_Base PUBLIC
     Tracy::TracyClient
+    absl::status
+    absl::strings
 )
 
 function(target_link_fct_base_libraries target_name)
